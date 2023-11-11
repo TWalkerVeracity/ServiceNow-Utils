@@ -55,3 +55,9 @@ else
 fi
 
 
+#Remove the chrome extension and reunpack it
+rm -rf publish/chrome-snutils
+unzip publish/chrome-snutils.zip -d publish/chrome-snutils
+open "http://reload.extensions/"
+
+# node publish/publish.mjs
