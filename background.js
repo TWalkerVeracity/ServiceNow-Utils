@@ -36,22 +36,22 @@ chrome.runtime.onInstalled.addListener(function (details) {
         //openFile("welcome.html");
     }
 
-    if (typeof chrome.declarativeContent !== 'undefined'){
+    if (typeof chrome.declarativeContent !== 'undefined') {
         chrome.declarativeContent.onPageChanged.removeRules(undefined, () => {
             chrome.declarativeContent.onPageChanged.addRules([
-            {
-                conditions: [ new chrome.declarativeContent.PageStateMatcher({
-                    pageUrl: {urlContains: urlContains},
-                })],
-                actions: [new chrome.declarativeContent.ShowAction()]
-            }
+                {
+                    conditions: [new chrome.declarativeContent.PageStateMatcher({
+                        pageUrl: { urlContains: urlContains },
+                    })],
+                    actions: [new chrome.declarativeContent.ShowAction()]
+                }
             ]);
         });
     }
 
 });
 
-function initializeContextMenus(){
+function initializeContextMenus() {
 
     for (var itemIdx = 0; itemIdx < menuItems.length; itemIdx++) {
         chrome.contextMenus.create(Object.assign(menuItems[itemIdx], defaultMenuConf));
@@ -74,7 +74,7 @@ function initializeContextMenus(){
                 var customCommands = JSON.parse(snusettings.slashcommands || "{}");
                 Object.keys(customCommands).forEach(function (key) {
                     //contexts =  (customCommands[key].url.includes("$0") ? "selection" : "all");
-                    if (customCommands[key].url.includes("contextmenu")){
+                    if (customCommands[key].url.includes("contextmenu")) {
                         chrome.contextMenus.create(Object.assign({
                             "id": "sc" + key,
                             "contexts": ["all"],
@@ -89,47 +89,38 @@ function initializeContextMenus(){
     });
 }
 // todo, will be used for sidepanel in upcoming release
-// chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
-//     console.log('onUpdated', tabId, info, tab);
-//     if (!tab.url) return;
-//     const url = new URL(tab.url);
-//     // Enables the side panel on google.com
-//     if (url.origin.includes('service-now.com')) {
-//       await chrome.sidePanel.setOptions({
-//         tabId,
-//         path: 'sidepanel.html',
-//         enabled: true
-//       });
-//     } else {
-//       // Disables the side panel on all other sites
-//       await chrome.sidePanel.setOptions({
-//         tabId,
-//         enabled: false
-//       });
-//     }
-//   });
+chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+    if (chrome?.sidePanel) {
+        await chrome.sidePanel.setOptions({ tabId, path: 'sidepanel.html', enabled: true });
+    }
+    else if (browser?.sidebarAction) { //Firefox uses sidebarAction API
+        await browser.sidebarAction.setPanel(tabId, { panel: "sidepanel.html" });
+    }
+});
+
+
+
 
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     var cookieStoreId = '';
-    if (sender){ //In Firefox the sender object can be empty #420 this construct is around that
-       if (sender.tab.hasOwnProperty('cookieStoreId')) 
-            cookieStoreId = sender.tab.cookieStoreId 
-    } 
+    if (sender) { //In Firefox the sender object can be empty #420 this construct is around that
+        if (sender.tab.hasOwnProperty('cookieStoreId'))
+            cookieStoreId = sender.tab.cookieStoreId
+    }
 
     if (message.event == "checkisservicenowinstance") {
-
-        if (!cookieStoreId && typeof chrome.contextualIdentities != 'undefined' ){
+        if (!cookieStoreId && typeof chrome.contextualIdentities != 'undefined') {
             chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
                 cookieStoreId = tabs[0].cookieStoreId || '';
                 cookieCheck();
             });
         }
-        else 
+        else
             cookieCheck();
-        
-        function cookieCheck(){ //nested function because sender object can be empty in FF
-            let params = { 
+
+        function cookieCheck() { //nested function because sender object can be empty in FF
+            let params = {
                 "name": "glide_user_route",
                 "url": message.origin
             }
@@ -144,12 +135,44 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     else if (message.event == "scriptsync") {
         createScriptSyncTab(cookieStoreId);
     }
-    // else if (message.event == "showsidepanel") {
-    //     instance = (new URL(sender.tab.url)).host.replace(".service-now.com", "");
-    //     setToChromeSyncStorage("instancebutton", message );
-    //     chrome.sidePanel.open({ windowId: sender.tab.windowId, tabId: sender.tab.id });
-    //     console.log('showsidepanel', message, sender);
-    // }
+    else if (message.event == "showsidepanel") {
+        instance = (new URL(sender.tab.url)).host.replace(".service-now.com", "");
+        setToChromeSyncStorage("instancetag", message.command);
+        if (chrome?.sidePanel)
+            chrome.sidePanel.open({ windowId: sender.tab.windowId, tabId: sender.tab.id });
+        else if (browser?.sidebarAction) {
+            //Firefox uses sidebarAction API this is must be open via conetxtmenu
+            // browser.sidebarAction.open(); doesnt work here.
+        }
+
+    }
+    else if (message.event == "updateinstancetagconfig") {
+        instance = (new URL(sender.tab.url)).host.replace(".service-now.com", "");
+        setToChromeSyncStorage("instancetag", message.command);
+    }
+    else if (message.event == "getinstancetagconfig") {
+        instance = (new URL(sender.tab.url)).host.replace(".service-now.com", "");
+        //using promise to make sure we get the instance tag config before we send the response
+        getFromSyncStorage("instancetag").then(instaceTagConfig => {
+            if (!instaceTagConfig) instaceTagConfig = getInitialInstaceTagConfig(instance);
+            var details = {
+                "action": "updateInstaceTagConfig",
+                "instaceTagConfig": instaceTagConfig,
+            };
+            chrome.tabs.sendMessage(sender.tab.id, {
+                "method": "snuUpdateSettingsEvent",
+                "detail": details,
+            }).then(response => {
+                console.log("Response from content script:", response);
+                sendResponse(response);
+            }).catch(error => {
+                sendResponse({ error: error });
+            });;
+
+        }).catch(error => {
+            sendResponse({ error: error });
+        });
+    }
     else if (message.event == "pop") {
         pop();
     }
@@ -230,7 +253,7 @@ chrome.commands.onCommand.addListener(function (command) {
 
 var menuItems = [{
     "type": "separator",
-    "id" : "sep1"
+    "id": "sep1"
 },
 
 {
@@ -344,6 +367,11 @@ var menuItems = [{
     "title": "Worknote Snippets"
 },
 {
+    "id": "showsidepanel",
+    "title": "Configure InstanceTag in Sidepanel",
+    "contexts": ["all"]
+},
+{
     "id": "opentabscriptsync",
     "title": "Open sn-scriptsync Helper Tab",
     "contexts": ["all"]
@@ -452,19 +480,25 @@ chrome.contextMenus.onClicked.addListener(function (clickData, tab) {
         openVersions(clickData, tab);
     else if (clickData.menuItemId == "stats")
         openUrl(clickData, tab, '/stats.do');
+    else if (clickData.menuItemId == "showsidepanel") {
+        if (chrome?.sidePanel)
+            chrome.sidePanel.open({ windowId: tab.windowId, tabId: tab.id });
+        else if (browser?.sidebarAction)
+            browser.sidebarAction.toggle();
+    }
     else if (clickData.menuItemId == "opentabscriptsync")
         createScriptSyncTab();
     else if (clickData.menuItemId == "copyselectedcellvalues")
         slashCommand('copycells');
     else if (clickData.menuItemId.includes('snippet'))
         insertSnippet(clickData, tab);
-    else if (clickData.menuItemId.startsWith('sc')){
+    else if (clickData.menuItemId.startsWith('sc')) {
         getFromSyncStorageGlobal("snusettings", function (snusettings) {
             if (!snusettings) snusettings = {};
             if (snusettings.hasOwnProperty("slashcommands")) {
                 var cmd = clickData.menuItemId.slice(2);
                 var cmds = JSON.parse(snusettings.slashcommands);
-                openUrl(clickData, tab,cmds[cmd].url);
+                openUrl(clickData, tab, cmds[cmd].url);
             }
         })
     }
@@ -483,6 +517,66 @@ function openSqlTrace(payload) {
         }, 500);
     });
 }
+
+function getInitialInstaceTagConfig(instance) {
+    //most efficient to do here I guess
+    let snuInstanceTagConfig = {
+        tagEnabled: true,
+        tagLeft: "1000px",
+        tagBottom: "0px",
+        tagText: instance,
+        tagFontSize: "11pt",
+        tagTagColor: "#4CAF50",
+        tagFontColor: "#FFFFFF",
+        tagOpacity: "0.8",
+        tagCommand: "/tn",
+        tagCommandShift: "/vd",
+        tagTextDoubleclick: "/pop"
+    };
+
+    if (/^dev\d{5,6}$/.test(instance)) { //matching dev12345 so a PDI
+        snuInstanceTagConfig.tagText = "PDI " + instance;
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#FFC107", "#9C27B0", "#03A9F4", "#E91E63", "#00BCD4"]);
+    }
+    else if (instance == "signon") {
+        snuInstanceTagConfig.tagTagColor = "#DEDEDE";
+        snuInstanceTagConfig.tagOpacity = "0.5";
+    }
+    else if (instance.includes("dev")) {
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#FBC02D", "#FFEB3B", "#F57F17", "#FF9800", "#FFC107"]);
+        snuInstanceTagConfig.tagFontColor = "#000000";
+    }
+    else if (instance.includes("test")) {
+        snuInstanceTagConfig.tagText = "Test";
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#388E3C", "#4CAF50", "#1B5E20", "#689F38", "#8BC34A"]);
+        snuInstanceTagConfig.tagFontColor = "#000000";
+    }
+    else if (instance.includes("sandbox")) {
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#607D8B", "#78909C", "#546E7A", "#455A64", "#CFD8DC"]);
+        snuInstanceTagConfig.tagFontColor = "#000000";
+    }
+    else if (instance.includes("demo")) {
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#7B1FA2", "#9C27B0", "#4A148C", "#6A1B9A", "#8E24AA"]);
+    }
+    else { //prod or other
+        snuInstanceTagConfig.tagTagColor = pickRandom(["#D32F2F", "#F44336", "#B71C1C", "#0D47A1", "#1976D2"]);
+    }
+
+    function pickRandom(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    if (instance.includes(".")) snuInstanceTagConfig.tagText = instance.split(".")[0];
+
+    setToChromeSyncStorage("instancetag", snuInstanceTagConfig);
+
+    return snuInstanceTagConfig;
+
+}
+
+
+
+
 
 
 function insertSnippet(e, f) {
@@ -724,13 +818,13 @@ function pop() {
         var u = new URL(tabs[0].url);
         var tid = tabs[0].id;
         var baseUrl = u.origin
-        var navToIdx = u.href.indexOf("nav_to.do?uri=") 
+        var navToIdx = u.href.indexOf("nav_to.do?uri=")
         if (navToIdx == -1) navToIdx = u.href.indexOf('now/nav/ui/classic/params/target/');
         if (navToIdx > -1) {
             if (u.href.includes("nav_to.do?uri="))
                 pth = decodeURIComponent(u.search.substring(5));
             else { //polaris
-                pth = decodeURIComponent(u.pathname.replace("now/nav/ui/classic/params/target/","") + u.search);
+                pth = decodeURIComponent(u.pathname.replace("now/nav/ui/classic/params/target/", "") + u.search);
             }
             chrome.tabs.update(tid, {
                 url: baseUrl + pth
@@ -773,7 +867,7 @@ function clearCookies(e, tabid, target) {
 
 function openUrl(e, f, u) {
 
-    var url = u.replace(/\$0/g,e.selectionText);
+    var url = u.replace(/\$0/g, e.selectionText);
     var tokens = e.pageUrl.split('/').slice(0, 3);
     if (!url.startsWith('http')) url = tokens.join('/') + url;
     var createObj = {
@@ -967,10 +1061,30 @@ function setToChromeSyncStorage(theName, theValue) {
 }
 
 //get an instance sync parameter
-function getFromSyncStorage(theName, callback) {
-    chrome.storage.sync.get(instance + "-" + theName, function (result) {
-        callback(result[instance + "-" + theName]);
-    });
+async function getFromSyncStorage(theName, callback) {
+    // Define the instance variable if it's not already defined
+    // Assuming 'instance' is a global variable or has been defined elsewhere
+    const instanceName = instance + "-" + theName;
+
+    // If a callback is provided, use the traditional callback approach
+    if (callback) {
+        chrome.storage.sync.get(instanceName, function (result) {
+            callback(result[instanceName]);
+        });
+    } else {
+        // If no callback is provided, return a promise
+        return new Promise((resolve, reject) => {
+            chrome.storage.sync.get(instanceName, function (result) {
+                if (chrome.runtime.lastError) {
+                    // Reject the promise if there's an error
+                    reject(chrome.runtime.lastError);
+                } else {
+                    // Resolve the promise with the result
+                    resolve(result[instanceName]);
+                }
+            });
+        });
+    }
 }
 
 //set an instance independent sync parameter
@@ -987,14 +1101,14 @@ function getFromSyncStorageGlobal(theName, callback) {
     chrome.storage.sync.get(theName, function (resSync) {
         var dataSync = resSync[theName];
 
-        if (typeof dataSync !== 'object'){ //only objects can become large and merged.
+        if (typeof dataSync !== 'object') { //only objects can become large and merged.
             callback(dataSync);
             return;
         }
 
-        getFromChromeStorageGlobal(theName,function (resLocal) {
+        getFromChromeStorageGlobal(theName, function (resLocal) {
             var objLocal = resLocal || {};
-            var objMerged = { ...dataSync, ...objLocal};
+            var objMerged = { ...dataSync, ...objLocal };
             callback(objMerged);
         });
     });
@@ -1008,22 +1122,22 @@ function snuFetch(token, url, post, callback) {
         'Content-Type': 'application/json'
     };
     if (token) //only for instances with high security plugin enabled
-        hdrs['X-UserToken'] = token; 
+        hdrs['X-UserToken'] = token;
 
     var requestInfo = {
-        method : 'get',
-        headers : hdrs
+        method: 'get',
+        headers: hdrs
     }
 
-    if (post){
+    if (post) {
         requestInfo.method = 'PUT';
         requestInfo.body = post;
     }
 
     fetch(url, requestInfo)
-    .then(response => response.json())
-    .then(data => { 
-        callback(data);
-    });
+        .then(response => response.json())
+        .then(data => {
+            callback(data);
+        });
 
 }

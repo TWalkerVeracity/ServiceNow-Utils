@@ -60,6 +60,10 @@ var snuslashcommands = {
         "url": "*",
         "hint": "Open Script Debugger"
     },
+    "clearbp": {
+        "url": "*",
+        "hint": "Clear All Your Log & Breakpoints"
+    },
     "bg": {
         "url": "sys.scripts.do",
         "hint": "Background Script"
@@ -148,6 +152,10 @@ var snuslashcommands = {
     "help": {
         "url": "*",
         "hint": "Open SN Utils info page"
+    },
+    "itt": {
+        "url": "*",
+        "hint": "InstanceTag Toggle"
     },
     "lang": {
         "url": "*",
@@ -396,13 +404,19 @@ var snuOperators = ["%", "^", "=", ">", "<", "ANYTHING", "BETWEEN", "DATEPART", 
 if (typeof g_ck == 'undefined') g_ck = null;  //prevent not defined errors when not provided in older instances , also see #453
 
 
-document.addEventListener('snuUpdateSettingsEvent', function (e) {
+document.addEventListener('snuUpdateSettingsEvent', e => {
     if (e.type == "snuUpdateSettingsEvent") {
         if (e?.detail?.action == "updateSlashCommand") {
             snuslashcommands[e.detail.cmdname] = e.detail.cmd;
             snuSlashCommandShow('/' + e.detail.cmdname + ' ', 0);
         }
+        else if (e?.detail?.action == "updateInstaceTagConfig") { //update instance tag settings hanlded in instancetag.js
+            if (typeof snuReceiveInstanceTagEvent == 'function')
+                    snuReceiveInstanceTagEvent(e);
+        }
+
     }
+
 });
 
 if (typeof jQuery != "undefined") {
@@ -843,6 +857,12 @@ function snuSlashCommandAddListener() {
                 snuGetUsersForImpersonate(query);
                 return;
             }
+            else if (shortcut == "itt") {
+                e.preventDefault();
+                snuInstanceTagToggle();
+                snuSlashCommandHide();
+                return;
+            }
             else if (shortcut == "ppt") {
                 e.preventDefault();
                 snuNextManager.linkPickers(0);
@@ -860,6 +880,10 @@ function snuSlashCommandAddListener() {
                     window.top.launchScriptDebugger();
                 else 
                     snuSlashCommandInfoText("Cannot start debugger from here.");
+                return;
+            }
+            else if (shortcut == "clearbp") {
+                snuRemoveBreakpoints();
                 return;
             }
             else if (shortcut == "code") {
@@ -1226,7 +1250,11 @@ function snuSlashCommandAddListener() {
                             snuLastOpened = (new Date()).getTime();
                             if (window.location.pathname.startsWith("/images") && !targeturl.startsWith("/")) 
                                 targeturl = "/" + targeturl;//ui15 adds /images to url
-                            window.open(targeturl, '_blank');
+                            
+                            setTimeout(() => { //this prevents opening in a new window. (we wnt a new tab)
+                                window.open(targeturl, '_blank');
+                            }, 1);
+                                
                         }
                         snuLastOpened = (new Date()).getTime();
 
@@ -1585,6 +1613,7 @@ function snuSettingsAdded() {
     snusettings.listfields ??= 'sys_updated_on,sys_updated_by,sys_scope,sys_created_on';
     snusettings.slashsswitches ??= '{}';
     snusettings.monacooptions ??= `{ "wordWrap" : "on", "contextmenu" : true }`;
+    snusettings.instancetag ??= false;
     
     try { //ignore if not valid json
         let addedslashsswitches = JSON.parse(snusettings.slashsswitches);
@@ -1755,6 +1784,14 @@ function snuSettingsAdded() {
                 })
             }
         }catch(ex){};
+    }
+    if (snusettings.instancetag){ 
+        if (window.self === window.top){ //ony parent window
+            let script = document.createElement('script');
+            script.src = snusettings.extensionUrl + 'js/instancetag.js';
+            script.async = false; // This is optional: set to true for asynchronous loading
+            document.head.appendChild(script);
+        }
     }
 }
 
@@ -3502,6 +3539,225 @@ function snuGetFormElementNames() {
 }
 snuGetFormElementNames();
 
+/**
+ * Removes all breakpoints for current user and reloads the active tabs editor's breakpoints gracefully.
+ * First grabs all the break and logpoints for the user via the table API, then generates a batch request for each breakpoint and logpoint.
+ * We use the same endpoint as the debugger does, since there is some session caching, so mutations with the table api take a
+ * significant amount of time to propagate to the debugger/code editors.
+ * 
+ * Once the batch requests are generated, we execute them and check if all requests were successful, and if so, we reload the breakpoints
+ * via the editors loadPoints function. For CodeMirror editors, we have to manually remove the line highlights, since they are not removed. 
+ */
+snuRemoveBreakpoints = function () {
+    //Check if user has admin or script_debugger role
+    if (!snuHasRoles(['admin', 'script_debugger'])) {
+        snuSlashCommandInfoText('You do not have the required roles to remove breakpoints.<br />', false);
+        return;
+    }
+
+    new Promise((resolve, reject) => {
+        //Get session token, this was the more direct way I found it on the jsDebugger page.
+        var token = g_ck || window?.document?.childNodes[1]?.childNodes[1]?.childNodes[1]?.contentWindow.g_ck;
+        if (!token) {
+            snuSlashCommandInfoText('No session token found<br />', false);
+            reject()
+            return;
+        }
+
+        //Fetch breakpoints and logpoints for current user.
+        var breakpoints = snuFetchData(token, `/api/now/table/sys_js_breakpoint?sysparm_query=userDYNAMIC90d1921e5f510100a9ad2572f2b477fe&sysparm_field=script_id,script_field,line,script_type`);
+        var logpoints = snuFetchData(token, `/api/now/table/sys_js_logpoint?sysparm_query=userDYNAMIC90d1921e5f510100a9ad2572f2b477fe&sysparm_field=script_id,script_field,line,script_type`);
+
+        //We need to wait on both requests so we can handle the responses together
+        Promise.all([breakpoints, logpoints])
+            .then((values) => {
+                //Generate batch requests for breakpoints and logpoints
+                //We don't need the session token on the sub-requests, since the batch request will handle that.
+                var batchHeaders = [
+                    { name: 'Accept', value: 'application/json' },
+                    { name: 'Content-Type', value: 'application/json' },
+                ];
+                var batchRequests = snuGenerateBatchRequests('POST', batchHeaders, '/api/now/js/debugger/breakpoint/$script_type/$script_id/$script_field/$line', values[0].result);
+                batchRequests = batchRequests.concat(snuGenerateBatchRequests('POST', batchHeaders, '/api/now/js/debugger/logpoint/$script_type/$script_id/$script_field/$line', values[1].result));
+
+                //If no breakpoints were found, resolve the promise and return false
+                if (batchRequests.length == 0) return false;
+
+                //Otherwise, execute the batch request
+                return snuBatchRequest(token, batchRequests);
+            })
+            .then((response) => {
+                //If the response is false, no breakpoints were found, so we resolve the promise and return
+                if (response === false) {
+                    snuSlashCommandInfoText('No breakpoints found<br />', false);
+                    resolve();
+                    return;
+                }
+
+                //Parse batch responses and check if all requests were successful
+                var batchOutcomes = response.serviced_requests.map((response) => {
+                    if (response.error_message) {
+                        console.error(response.error_message);
+                        return false;
+                    }
+                    if (response.status_code != 200) {
+                        return false;
+                    }
+                    return true;
+                })
+
+                //Count the successful requests
+                var successfulRequests = batchOutcomes.filter((outcome) => outcome).length;
+
+                //If not all requests were successful, log the errors and resolve the promise
+                if (successfulRequests != batchOutcomes.length) {
+                    snuSlashCommandInfoText(`Encountered errors, removed ${successfulRequests} breakpoints<br />`, false);
+                    console.error("Encountered errors while removing breakpoints", response)
+                }
+                else {
+                    snuSlashCommandInfoText(`Removed ${successfulRequests} breakpoints<br />`, false);
+                }
+                resolve();
+            })
+            .catch((error) => {
+                reject(error);
+            });
+    }).then(() => {
+        //We then need to update the loadPoints function on the active tab's editor.
+        //Breakpoints are not removed from the editor until the page is reloaded, only debugger has a record watcher
+        try {
+            if (location.pathname.startsWith("/$jsdebugger.do")) return; //Debugger has its own record watchers.
+
+            //Our editors are likely in a iframe or macroponent, so we need to find them
+            let iframes = window.top.document.querySelectorAll("iframe");
+            if (!iframes.length && document.querySelector("[global-navigation-config]")) //try to find iframe in case of polaris
+                iframes = document.querySelector("[global-navigation-config]").shadowRoot.querySelectorAll("iframe");
+
+            //We first check all iframes
+            Array.from(iframes).forEach(function (frame) {
+                updateBreakpointsOnEditors(frame.contentWindow);
+            });
+
+            //We then check the window object
+            updateBreakpointsOnEditors(window);
+
+            /**
+             * Updates all code editors, monaco or codemirror, in the target window.
+             * TODO: Code mirror won't render the changes if the element isn't visible. We can force a redraw with .refresh() call so in the future we can do that like we do for the studio script editor fix. 
+             * @param {*} targetWindow The window object to update editors in, either window or frame.contentWindow
+             */
+            function updateBreakpointsOnEditors(targetWindow) {
+                //All the editors are stored in g_glideEditorArray regardless of type
+                let editorList = targetWindow.g_glideEditorArray;
+                if (typeof editorList != 'undefined' && Array.isArray(editorList)) {
+                    editorList.forEach((editor) => {
+                        //If the editor is a monaco editor, we can just call loadPoints
+                        if (editor.monacoCommmon) editor.monacoCommmon.loadPoints();
+
+                        //Otherwise its a codemirror editor, and we have to manually remove the line highlights.
+                        else {
+                            var breakpoints = targetWindow.GlideEditorJSBreakpoints.getBreakPoints();
+                            var logpoints = targetWindow.GlideEditorJSLogpoints.getLogPoints();
+                            var points = Object.keys(breakpoints).concat(Object.keys(logpoints));
+                            for (point of points) {
+                                editor.editor.removeLineClass(point - 1, "background", "Debugger-breakpoints-highlight");
+                            }
+                            targetWindow.GlideEditorJSCommon.loadPoints(editor.id, editor.editor);
+                        }
+                    });
+                }
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }).catch((error) => {
+        snuSlashCommandInfoText('Failed to remove breakpoints<br />', false);
+        console.error(error);
+    });
+};
+
+/**
+ * Generates an array of batch requests for a single endpoint.
+ * This is useful for endpoints where only one action can be performed at a time (e.g., delete, remove breakpoints).
+ * It replaces $<variable_id> with the corresponding property from objects in the parameters array.
+ * The 'body' property for is placed into the REST body for POST requests.
+ *
+ * @param {String} method - The HTTP method for all requests.
+ * @param {Object[]} headers - The headers for all requests. Session token goes on batch call.
+ * @param {string} headers[].name - The name of the header.
+ * @param {string} headers[].value - The value of the header.
+ * @param {string} urlTemplate - The URL template for all requests. $variables are replaced with the corresponding value in the parameters array.
+ * @param {Object[]} parameters - The parameters for all requests. Properties are replaced with the replacement keys $<key>.
+ * @param {Boolean} excludeResponseHeaders - Whether to exclude response headers, reducing the size of the response. Defaults to true.
+ * @returns {Object[]} An array of batch requests for the ServiceNow batch endpoint.
+ */
+function snuGenerateBatchRequests(method, headers, urlTemplate, parameters, excludeResponseHeaders) {
+
+    //Default excludeResponseHeaders to true
+    excludeResponseHeaders = typeof excludeResponseHeaders != 'undefined' ? excludeResponseHeaders : true;
+
+    //Generate batch requests
+    var restRequests = parameters.map((substitutionObj) => {
+        var id = Math.random().toString(36).substring(7);
+
+        //Replace $variables in the URL template, excluding body
+        let result = urlTemplate;
+        for (let key in substitutionObj) {
+            if (key == 'body') continue;
+            result = result.replace(new RegExp('\\$' + key, 'g'), substitutionObj[key]);
+        }
+
+        //Create the batch request and add body if necessary
+        var restRequest = {
+            id: id,
+            method: method,
+            headers: headers,
+            url: result,
+            exclude_response_headers: excludeResponseHeaders,
+        };
+        if (method == 'POST' && substitutionObj.body) {
+            restRequest.body = substitutionObj.body;
+        }
+        return restRequest;
+    });
+    return restRequests;
+};
+
+/**
+ * Makes an call to the batch api endpoint, dramatically improving performance for multiple requests
+ * @param {String} token Glide session token
+ * @param {Array} requests Array of requests to be made
+ * @param {Function} callback Callback function
+ * @returns {Promise} Promise object representing the response
+ */
+function snuBatchRequest(token, requests, callback) {
+    return new Promise(async (resolve, reject) => {
+        const headers = {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-UserToken': token,
+        };
+
+        try {
+            const response = await fetch('/api/now/v1/batch', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    batch_request_id: 'snu' + Math.random().toString(36).substring(7),
+                    rest_requests: requests,
+                }),
+            });
+            const data = response.ok ? await response.json() : reject("Error in batch request");
+            if (callback) callback(data);
+            resolve(data);
+        } catch (error) {
+            if (callback) callback(error);
+            reject(error);
+        }
+    });
+}
+
+
 async function snuFetchData(token, url, post, callback) {
     return new Promise(async (resolve, reject) => {
       const headers = {
@@ -3676,6 +3932,70 @@ function snuSlashCommandInfoText(msg, addText) {
     var txt = addText ? window.top.document.getElementById('snudirectlinks').innerHTML : "";
     window.top.document.getElementById('snudirectlinks').innerHTML = DOMPurify.sanitize(txt + msg, { ADD_ATTR: ['target'] });
 }
+
+/**
+ * Check all available window/iframes for the specified role(s).
+ * @param {String[]} roleArray An array of roles to check for
+ * @param {Boolean} [matchAll] Whether all provided roles must be present, or just one, defaults to false
+ * @param {Boolean} [permitImpersonator] Whether an active impersonater can bypass the check, defaults to false
+ * @returns {Boolean} Whether the user has met the specified conditions
+ */
+function snuHasRoles(roleArray, matchAll, permitImpersonator) {
+    if (typeof window.g_user != 'undefined' || window.ux_globals != 'undefined')
+        return snuHasRolesOnWindow(window, roleArray, matchAll, permitImpersonator);
+    else {
+        var iFrames = snuLocateIFrames();
+        for (i = 0; i < iFrames.length; i++) {
+            if (typeof iFrames[i].contentWindow.g_user != 'undefined' | typeof iFrames[i].contentWindow.ux_globals != 'undefined') {
+                return snuHasRolesOnWindow(iFrames[i].contentWindow, roleArray, matchAll, permitImpersonator);
+            }
+        }
+    }
+    return false;
+}
+
+
+/**
+ * Checks the target windows' roles for the specified role(s).
+ * @param {String[]} roleArray An array of roles to check for
+ * @param {Window} targetWindow The window object to check, either window or frame.contentWindow
+ * @param {Boolean} [matchAll] Whether all provided roles must be present, or just one, defaults to false
+ * @param {Boolean} [permitImpersonator] Whether an active impersonater can bypass the check, defaults to false
+ * @returns {Boolean} Whether the user has met the specified conditions
+ */
+function snuHasRolesOnWindow(targetWindow, roleArray, matchAll, permitImpersonator) {
+    //Grab the roles from the target window and the role array
+    if (!roleArray.length) return false;
+
+    //Default matchAll and permitImpersonator to false
+    var matchAll = matchAll || false;
+    var permitImpersonator = permitImpersonator || false;
+
+    var userRoles = [];
+    if (typeof targetWindow.g_user != 'undefined') userRoles = targetWindow.g_user.roles;
+    else if (typeof targetWindow.ux_globals != 'undefined') userRoles = ux_globals.session.output.user.roles;
+
+    //We check if the user has each role, and store the result in an array
+    var hasRole = roleArray.map(role => userRoles.includes(role));
+    var pass = matchAll ? (hasRole.every(r => r) && roleArray.length) : hasRole.some(r => r);
+
+    //If impersonation bypass is enabled, we check if the user is impersonating
+    if (permitImpersonator && snuImpersonater(document)) pass = true;
+    return pass;
+}
+
+/**
+ * Locates the iframes present on a page, and returns them in an array.
+ * Many places, such as studio and polaris platforms, use iframes to load content.
+ * @returns {Array} Array of iframes on the page
+ */
+function snuLocateIFrames() {
+    var iframes = window.top.document.querySelectorAll("iframe");
+    if (!iframes.length && document.querySelector("[global-navigation-config]")) //try to find iframe in case of polaris
+        iframes = document.querySelector("[global-navigation-config]").shadowRoot.querySelectorAll("iframe");
+    return iframes;
+}
+
 
 function snuFillFields(query) {
 
@@ -4288,20 +4608,6 @@ function snuScriptSync() {
     window.top.document.dispatchEvent(event);
     sncWait();
 }
-
-// function snuShowSidePanel() {
-//     var event = new CustomEvent(
-//         "snutils-event",
-//         {
-//             detail: {
-//                 event: "showsidepanel",
-//                 command: JSON.parse(localStorage.getItem("snuButtonPosition")) || {}
-//             }
-//         }
-//     );
-//     window.top.document.dispatchEvent(event);
-//     sncWait();
-// }
 
 function snuScriptSyncPostData(data) {
     var event = new CustomEvent(
@@ -5017,7 +5323,7 @@ function snuDoSlashNavigatorSearch(search, arrDigits = []) {
     let words = [...new Set(search.toLowerCase().split(' '))].filter((n) => n.length > 1).reduce(
         (unique, item) => ( unique.filter(e => item.includes(item)).length > 5 ? unique : [...unique, item]),[],); //todo check undouble
 
-    let directlinks = '<div style="font-weight:bold; margin-bottom:5px; padding-top:5px;">🔍 Navigator search</div>Tip: Hit SHIFT to toggle keyboard navigation<br />';
+    let directlinks = '<div style="font-weight:bold; margin-bottom:5px; padding-top:5px;">&#128269; Navigator search</div>Tip: Hit SHIFT to toggle keyboard navigation<br />';
     let idx = 1;
     let dispIdx = 0;
     let lastgroup = '';
@@ -5196,8 +5502,9 @@ function snuHyperlinkifyWorkNotes() {
         let newContent =  crd.innerHTML.replace(urlRegex, function (url) {
             return '<a href="' + url + '" target="_blank" title="[SN Utils] Converted to hyperlink">' + url + '</a>';
         });
-        if (newContent) //dont apply when empty after regex, can happen when work note uses [code] tag
-            crd.innerHTML = DOMPurify.sanitize(newContent, { ADD_ATTR: ['target'] });
+        let purifyContent = DOMPurify.sanitize(newContent, { ADD_ATTR: ['target'] }); 
+        if (newContent && (purifyContent.length == newContent.length)) //dont apply when empty after regex or purify changed it, can happen when work note uses [code] tag
+            crd.innerHTML = newContent;
         crd.classList.add('snuified');
     })
 }
@@ -5291,4 +5598,14 @@ function snuSlashCommandNumberNav(toggle){
         localStorage.setItem('snunumbernav', snunumbernav);
     }
     return snunumbernav;
+}
+
+function snuInstanceTagToggle(){
+    if (typeof snuInstanceTag == 'undefined') 
+        snuSlashCommandInfoText('Please enable InstanceTag in the settings first', false);
+    else {
+        snuInstanceTagConfig.tagEnabled = !snuInstanceTagConfig.tagEnabled;
+        document.documentElement.style.setProperty("--snu-instancetag-tag-display", snuInstanceTagConfig.tagEnabled ? "" : "none");
+        snuDispatchBackgroundEvent("updateinstancetagconfig", snuInstanceTagConfig);
+    }
 }
