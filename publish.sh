@@ -43,15 +43,8 @@ sed -i '' "6s/.*/$var/" publish/manifest-onprem.json
 sed -i '' "6s/.*/$var/" publish/manifest-firefox-onprem.json
 sed -i '' "6s/.*/$var/" publish/manifest-edge.json
 
-#publishing same version# to Chrome is a pain, adding a check..
-currentversion=$(sed '6!d' manifest.json) #get version from main manifest.json (content of line 6)
-lastpublishedversion=`cat publish/lastpublishedversion.txt` 
-if [ "$lastpublishedversion" = "$currentversion" ]; then
-    echo "Can not publish, version not updated in manifest.json: $currentversion"
-else
-    node publish/publish.mjs
-    echo "Publishing: $currentversion"
-    echo "$currentversion" > publish/lastpublishedversion.txt #write version to file
-fi
 
-
+#Remove the chrome extension and reunpack it
+rm -rf publish/chrome-snutils
+unzip publish/chrome-snutils.zip -d publish/chrome-snutils
+open "http://reload.extensions/"
