@@ -1,0 +1,81 @@
+<html data-bs-theme="dark">
+
+<head>
+  <title>SQL Trace - SN Utils</title>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="css/bootstrap.min.css">
+  <link rel="stylesheet" href="css/datatables.min.css">
+  <link rel="stylesheet" href="css/font-awesome.min.css">
+  <link rel="stylesheet" href="css/viewdata.css">
+
+
+  <script src="js/purify.min.js"></script>
+  <script src="js/jquery.min.js"></script>
+  <script src="js/bootstrap.bundle.min.js"></script>
+  <script src="js/moment.js"></script>
+  <script src="js/datatables.min.js"></script>
+  <script src="js/datatables-datetime.js"></script>
+  <script src="js/sql-formatter.min.js"></script>
+  <script src="js/sql-highlight.js" type="module"></script>
+  <script src="sqltrace.js" type="module"></script>
+
+  <style>
+    code.sql {
+      font-family: monospace;
+      background-color: #000;
+    }
+
+    .sql-hl-keyword {
+      color: #07a;
+    }
+
+    .sql-hl-string {
+      color: #00446b;
+    }
+
+    .sql-hl-special {
+      color: #a67f59;
+    }
+
+    .sql-hl-bracket {
+      color: #999
+    }
+  </style>
+  <base href="/#">
+</head>
+
+<body>
+  <div id="fixheader">
+    <h5><img class="wdth40" src="/images/icon128.png" alt="SN Utils logo" /> SQL Trace Details</h5>
+    <!-- <div class="input-group">
+      <input type="search" id="tbxdataexplore" name="tbxdataexplore" class="form-control form-control-sm sync"
+        placeholder="Search data...">
+      <div id="divhideempty">
+        <input class="form-check-input sync" type="checkbox" id="cbxhideempty" name="cbxhideempty">
+        <label class="form-check-label" for="cbxhideempty" title="Hide rows where the field is empty">
+          Hide empty rows.
+        </label></input>
+      </div>
+      <button id='btnrefreshdataexplore' class="btn btn-outline-secondary btn-sm" title="Refresh data"
+        type="button">Refresh</button>
+    </div> -->
+  </div>
+
+  <div id="loader">
+
+  </div>
+
+  <table id="dataexplore" class="display table-condensed dxp">
+    <thead>
+      <tr>
+        <th>Count</th>
+        <th>Query</th>
+        <th>Database Duration (ms)</th>
+        <th>Type</th>
+      </tr>
+    </thead>
+  </table>
+
+</body>
+
+</html>
