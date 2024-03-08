@@ -151,6 +151,40 @@ function devidePage() {
 					});
 					oldLink.append(lnk);
 				}
+				//Add SQLTrace link if we find valid sql queries
+				let sqlRegex = /Time: (\d+:\d+:\d+\.\d+) id: .+ for: (.+)(\/\*.+\*\/)?/;
+				if (text.match(sqlRegex)) {
+
+					//After the second to last <hr> tag we add a new section by adding a hr tag
+					//And a link to the sql trace list
+					let sqlTraceSection = document.createElement('div');
+					sqlTraceSection.appendChild(document.createTextNode('A SQL log was detected in the log output, '));
+					let sqlTraceLink = document.createElement('a');
+					sqlTraceLink.innerText = 'view SQL trace.';
+					sqlTraceLink.href = '#';
+					sqlTraceSection.appendChild(sqlTraceLink);
+					sqlTraceSection.appendChild(document.createElement('br'));
+					sqlTraceSection.appendChild(document.createElement('hr'));
+
+
+					//Locate the HR element to insert the new section after
+					let hrElements = document.querySelectorAll('.result hr');
+					hrElements[hrElements.length - 2].insertAdjacentElement('afterend', sqlTraceSection);
+
+					sqlTraceLink.addEventListener('click', evt => {
+						document.dispatchEvent(
+							new CustomEvent(
+								"snutils-event",
+								{
+									detail: {
+										event: "sqltrace",
+										command: text
+									}
+								}
+							))
+					});
+				}
+
 
 			})
 		e.preventDefault();

@@ -198,6 +198,9 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         if (cookieStoreId) createObj.cookieStoreId = cookieStoreId;
         chrome.tabs.create(createObj);
     }
+    else if (message.event == "sqltrace") {
+        openSqlTrace(message.command);
+    }
     return true;
 });
 
@@ -469,8 +472,17 @@ chrome.contextMenus.onClicked.addListener(function (clickData, tab) {
 });
 
 
-
-
+function openSqlTrace(payload) {
+    chrome.tabs.create({ url: chrome.runtime.getURL("sqltrace.html") }, function (tab) {
+        // Send data to the newly created tab if needed
+        setTimeout(function () {
+            chrome.tabs.sendMessage(tab.id, {
+                action: "sqltrace",
+                data: payload
+            });
+        }, 500);
+    });
+}
 
 
 function insertSnippet(e, f) {
