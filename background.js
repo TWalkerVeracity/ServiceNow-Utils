@@ -687,11 +687,13 @@ function viewData(message, cookieStoreId) {
 }
 
 function openCodeEditor(message) {
+
     var url = chrome.runtime.getURL("codeeditor.html");
     var createObj = {
         'url': url,
         'active': true
     }
+    if (cookieStoreId) createObj.cookieStoreId = cookieStoreId; //only FireFox
     chrome.tabs.create(createObj);
 }
 
@@ -701,6 +703,7 @@ function openCodeDiff(message) {
         'url': url,
         'active': true
     }
+    if (cookieStoreId) createObj.cookieStoreId = cookieStoreId; //only FireFox
     chrome.tabs.create(createObj);
 }
 
@@ -710,6 +713,7 @@ function openFile(link) {
         'url': url,
         'active': true
     }
+    if (cookieStoreId) createObj.cookieStoreId = cookieStoreId; //only FireFox
     chrome.tabs.create(createObj);
 }
 
