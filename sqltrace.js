@@ -134,22 +134,21 @@ function removeBatchStatements(sql) {
  * @returns An object with the single statements grouped by fingerprint
  */
 function parseSingleStatements(sql) {
-    let singleStatementRegex = /Time: (\d+:\d+:\d+\.\d+) id: .+ for: (.+)(\/\*.+\*\/)?/;
+    let singleStatementRegex = /Time: (\d+:\d+:\d+\.\d+) id: .+? for: (.+?)(\/\*.+?\*\/\s*?)/gs;
 
     //Remove the batch statements, they contain valid SQL but are handled separately
     let strippedSql = removeBatchStatements(sql);
 
     //Extract the execution time, SQL statements and comments
-    let sqlArray = strippedSql.split('\n').map((line) => {
-        let match = line.match(singleStatementRegex);
-        if (match) {
-            return {
-                time: parseTime(match[1]),
-                raw_sql: match[2],
-                comment: match[3]
-            }
-        }
-    }).filter((obj) => { return obj });
+    let sqlArray = [];
+    let match;
+    while ((match = singleStatementRegex.exec(strippedSql)) !== null) {
+        sqlArray.push({
+            time: parseTime(match[1]),
+            raw_sql: match[2],
+            comment: match[3]
+        });
+    }
 
     //Fingerprint the SQL
     let fingerprintedSQL = sqlArray.map((line) => {
@@ -201,8 +200,9 @@ function setViewData(dataRows) {
                 let formatedSql = sqlFormatter.format(row.query, { language: 'mariadb', keywordCase: 'upper', dataTypeCase: 'upper' });
                 row.query = '<pre>' + highlight.highlight(formatedSql, { html: true }) + '</pre>';
             }
-            catch {
-                row.query = '<pre>' + sql + '</pre>';
+            catch (error) {
+                console.error(error);
+                row.query = '<pre>' + row.query + '</pre>';
             }
         }
     );

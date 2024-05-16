@@ -90,6 +90,15 @@ if (snusettings.applybgseditor && scrpt) {
 		});
 		editor.focus();
 	});
+
+	///Set the scope if specified in the url, we only set the scope if it exists in the dropdown
+	if (urlparams.scope) {
+		var selectElement = document.querySelector('select[name=sys_scope]');
+		var optionExists = Array.from(selectElement.options).some(option => option.value === urlparams.scope);
+		if (optionExists) {
+			selectElement.value = urlparams.scope;
+		}
+	}
 }
 
 document.addEventListener('snuEvent', function (e) {
