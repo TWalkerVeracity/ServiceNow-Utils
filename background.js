@@ -12,6 +12,7 @@ var urlFull;
 var updateSetTables = [];
 var lastCommand;
 var cmd = {};
+let isArc = false;
 
 var urlContains = ".service-now.com";
 var urlPattern = "https://*.service-now.com/*"
@@ -88,7 +89,7 @@ function initializeContextMenus() {
         }
     });
 }
-// todo, will be used for sidepanel in upcoming release
+//used for sidepanel maybe can be done different...
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
     if (chrome?.sidePanel) {
         await chrome.sidePanel.setOptions({ tabId, path: 'sidepanel.html', enabled: true });
@@ -135,6 +136,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
         createScriptSyncTab(cookieStoreId);
     }
     else if (message.event == "showsidepanel") {
+        if (message?.command?.isArc) isArc = true;
         instance = (new URL(sender.tab.url)).host.replace(".service-now.com", "");
         setToChromeSyncStorage("instancetag", message.command);
         if (chrome?.sidePanel)
@@ -504,6 +506,24 @@ chrome.contextMenus.onClicked.addListener(function (clickData, tab) {
 
 });
 
+
+function showSidepanel(tab, viaContextMenu) {
+    if (chrome?.sidePanel && !isArc) //all that have the api except arc browser
+        chrome.sidePanel.open({ windowId: tab.windowId, tabId: tab.id });
+    else if (typeof browser !== "undefined" && browser?.sidebarAction && viaContextMenu) { //Firefox
+        //Firefox uses sidebarAction API this is must be open via contetxtmenu
+        //otherwise fall back to popup
+        browser.sidebarAction.open();
+    }
+    else { //fallback to a popup
+        chrome.windows.create({
+            url: chrome.runtime.getURL("sidepanel.html") + "?tabid=" + tab.id,
+            type: "popup",
+            width: 400,
+            height: 800
+        });
+    }
+}
 
 
 function getInitialInstaceTagConfig(instance) {
