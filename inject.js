@@ -4294,6 +4294,13 @@ function snuSlashCommandHide(navFocus = false, evt) {
 
     if (storeSlashLog) snuSlashLog(true);
 
+    // Abort any ongoing sys_id search
+    if (window.snuSysIdSearchAbortController) {
+        window.snuSysIdSearchAbortController.abort();
+        window.snuSysIdSearchAbortController = null;
+        console.log('[SN Utils] Sys_id search aborted due to palette close');
+    }
+
     window.top.document.snuSelection = '';
     if (window.top.document.querySelector('div.snutils') != null) {
         window.top.document.querySelector('div.snutils').style.display = 'none';
@@ -5069,79 +5076,195 @@ function sncWait(ms) { //dirty. but just need to wait a sec...
     }
 }
 
-function snuSearchSysIdTables(sysId) {
+async function snuSearchSysIdTables(sysId) {
+    // Create new abort controller for this search
+    window.snuSysIdSearchAbortController = new AbortController();
+    const signal = window.snuSysIdSearchAbortController.signal;
+
     try {
-        snuSlashCommandInfoText("Searching for sys_id. This may take a few seconds...<br />", false);
-        var script = `      
-            function findSysID(sysId) {
-                var tbls = ['sys_metadata', 'task', 'cmdb_ci', 'sys_user', 'kb_knowledge'];
-                var rtrn;
-                var i = 0;
-                while (tbls[i]) {
-                    rtrn = findClass(tbls[i], sysId);
-                    i++;
+        snuSlashCommandInfoText("Searching for sys_id...<br />", false);
 
-                    if (rtrn) {
-                        gs.print("###" + rtrn + "###")
-                        return
-                    };
-                }
+        // Phase 1: Initial high-priority tables
+        const initialTables = ['sys_metadata', 'task', 'cmdb_ci', 'sys_user'];
+        
+        // Phase 2: Priority tables (common tables where sys_ids are frequently found)
+        const priorityTables = [
+            'alm_asset',
+            'sys_attachment',
+            'business_unit',
+            'sys_choice',
+            'task_ci',
+            'cmdb_rel_ci',
+            'core_company',
+            'sys_update_xml',
+            'cmn_department',
+            'sys_email',
+            'sys_ui_form_section',
+            'sys_import_set',
+            'sys_import_set_row',
+            'interaction',
+            'kb_knowledge',
+            'kb_knowledge_base',
+            'kb_category',
+            'cmn_location',
+            'sys_package',
+            'quick_links',
+            'label',
+            'task_sla',
+            'sys_update_set',
+            'sys_user_preference',
+            'wf_context',
+            'sys_user_group',
+            'sys_user_group_type'
+        ];
 
-                var tblsGr = new GlideRecord("sys_db_object");
-                tblsGr.addEncodedQuery("super_class=NULL^sys_update_nameISNOTEMPTY^nameNOT LIKE00^nameNOT LIKE$^nameNOT INsys_metadata,task,cmdb_ci,sys_user,kb_knowledge,cmdb_ire_partial_payloads_index^scriptable_table=false^ORscriptable_tableISEMPTY");
-                tblsGr.query();
-                while (tblsGr.next()) {
-                    var tableName = tblsGr.getValue('name');
-                    var forbiddenPrefixes = ['ts_', 'sysx_', 'v_', 'sys_rollback_', 'pa_'];
-                    var hasForbiddenPrefix = forbiddenPrefixes.some(function(forbiddenPrefix) {
-                        return tableName.startsWith(forbiddenPrefix);
-                    });
-                    if (hasForbiddenPrefix) {
-                        continue;
-                    }
-                    rtrn = findClass(tableName, sysId);
-                    if (rtrn) {
-                        gs.print("###" + rtrn + "###")
-                        return
-                    };
-                }
-                function findClass(t, sysId) {
-                    try {
-                        var s = new GlideRecord(t);
-                        s.addQuery('sys_id', sysId);
-                        // Order is important: setWorkflow must be before setLimit.
-                        s.setWorkflow(false);
-                        s.setLimit(1);
-                        s.queryNoDomain();
-                        s.query();
-                        if (s.hasNext()) {
-                            s.next();
-                            if (s.getUniqueValue() != sysId) return false; //Some tables dont have sysid #568
-                            return s.getRecordClassName() + "^" 
-                            + s.getClassDisplayValue() + " - " 
-                            + s.getDisplayValue() ;
+        const forbiddenPrefixes = ['ts_', 'sysx_', 'v_', 'sys_rollback_', 'pa_'];
+        const BATCH_SIZE = 100;
+
+        // Helper to create batch request for a table
+        function createBatchRequest(table, sysId) {
+            const params = new URLSearchParams({
+                sysparm_query: `sys_id=${sysId}`,
+                sysparm_fields: 'sys_class_name,sys_id,name,title,number',
+                sysparm_limit: '1',
+                sysparm_display_value: 'all'
+            });
+
+            return {
+                id: table,
+                method: 'GET',
+                url: `/api/now/table/${table}?${params.toString()}`,
+                headers: [
+                    { name: 'Content-Type', value: 'application/json' },
+                    { name: 'Accept', value: 'application/json' }
+                ],
+                exclude_response_headers: true
+            };
+        }
+
+        // Helper to search in a batch of tables
+        async function findInTablesBatch(tables) {
+            const batchRequests = tables.map(table => createBatchRequest(table, sysId));
+            const response = await snuBatchRequest(g_ck, batchRequests);
+
+            if (response && response.serviced_requests) {
+                for (const serviced of response.serviced_requests) {
+                    if (serviced.status_code === 200 && serviced.body) {
+                        const decodedBody = atob(serviced.body);
+                        const result = JSON.parse(decodedBody);
+
+                        if (result.result && result.result.length > 0) {
+                            const record = result.result[0];
+                            const table = serviced.id;
+                            const actualTable = record.sys_class_name?.value;
+
+                            // Return the actual table if different, otherwise the found table
+                            return {
+                                table: actualTable || table,
+                                displayValue: record.name?.display_value || 
+                                             record.title?.display_value || 
+                                             record.number?.display_value || 
+                                             record.sys_id?.display_value
+                            };
                         }
-                    } catch(err) {  }
-                    return false;
+                    }
                 }
             }
-            findSysID('`+ sysId + `')
-        `;
-        snuStartBackgroundScript(script, function (rspns) {
-            answer = rspns.match(/###(.*)###/);
-            if (rspns.length == 0)
-                snuSlashCommandInfoText('Could not search for sys_id. (are you an Admin?)<br />', true);
-            else if (answer != null && answer[1]) {
-                var table = answer[1].split('^')[0];
-                var url = table + '.do?sys_id=' + sysId;
-                snuSlashCommandInfoText(`Opening in new tab: <a target='_blank' href='${url}'>${table}<br />`, true);
-                window.open(url, '_blank');
-            } else {
-                snuSlashCommandInfoText('sys_id was not found...<br />', true);
+            return null;
+        }
+
+        // Phase 1: Search initial tables
+        if (signal.aborted) return;
+        snuSlashCommandInfoText("Searching initial tables...<br />", false);
+        let result = await findInTablesBatch(initialTables);
+        if (result) {
+            const url = result.table + '.do?sys_id=' + sysId;
+            snuSlashCommandInfoText(
+                `Found! Opening in new tab: <a target='_blank' href='${url}'>${result.table}</a> - ${result.displayValue}<br />`, 
+                true
+            );
+            window.open(url, '_blank');
+            window.snuSysIdSearchAbortController = null;
+            return;
+        }
+
+        // Phase 2: Search priority tables
+        if (signal.aborted) return;
+        snuSlashCommandInfoText("Searching priority tables...<br />", false);
+        result = await findInTablesBatch(priorityTables);
+        if (result) {
+            const url = result.table + '.do?sys_id=' + sysId;
+            snuSlashCommandInfoText(
+                `Found! Opening in new tab: <a target='_blank' href='${url}'>${result.table}</a> - ${result.displayValue}<br />`, 
+                true
+            );
+            window.open(url, '_blank');
+            window.snuSysIdSearchAbortController = null;
+            return;
+        }
+
+        // Phase 3: Get all remaining tables and search in batches
+        if (signal.aborted) return;
+        snuSlashCommandInfoText("Fetching table list...<br />", false);
+        
+        const allTablesResponse = await snuFetchData(
+            g_ck,
+            '/api/now/table/sys_db_object?sysparm_query=' +
+            encodeURIComponent(
+                'super_class=NULL^sys_update_nameISNOTEMPTY^nameNOT LIKE00^nameNOT LIKE$^' +
+                'nameNOT INsys_metadata,task,cmdb_ci,sys_user,cmdb_ire_partial_payloads_index^' +
+                'scriptable_table=false^ORscriptable_tableISEMPTY'
+            ) +
+            '&sysparm_fields=name',
+            null,
+            null
+        );
+
+        if (signal.aborted) return;
+
+        if (allTablesResponse && allTablesResponse.result) {
+            const allTables = allTablesResponse.result
+                .map(record => record.name)
+                .filter(tableName => 
+                    tableName &&
+                    !initialTables.includes(tableName) &&
+                    !priorityTables.includes(tableName) &&
+                    !forbiddenPrefixes.some(prefix => tableName.startsWith(prefix))
+                );
+
+            // Search in batches
+            for (let i = 0; i < allTables.length; i += BATCH_SIZE) {
+                // Check if aborted before each batch
+                if (signal.aborted) return;
+
+                const tableBatch = allTables.slice(i, i + BATCH_SIZE);
+                const tablesProcessed = Math.min(i + BATCH_SIZE, allTables.length);
+                const progress = Math.round((tablesProcessed / allTables.length) * 100);
+                snuSlashCommandInfoText(
+                    `Searching remaining tables... ${progress}% (${tablesProcessed}/${allTables.length})<br />`, 
+                    false
+                );
+
+                result = await findInTablesBatch(tableBatch);
+                if (result) {
+                    const url = result.table + '.do?sys_id=' + sysId;
+                    snuSlashCommandInfoText(
+                        `Found! Opening in new tab: <a target='_blank' href='${url}'>${result.table}</a> - ${result.displayValue}<br />`, 
+                        true
+                    );
+                    window.open(url, '_blank');
+                    window.snuSysIdSearchAbortController = null;
+                    return;
+                }
             }
-        });
+        }
+
+        snuSlashCommandInfoText('sys_id was not found in any table...<br />', true);
+        window.snuSysIdSearchAbortController = null;
     } catch (error) {
-        snuSlashCommandInfoText(error + "<br />", true);
+        window.snuSysIdSearchAbortController = null;
+        console.error('[SN Utils] Error searching for sys_id:', error);
+        snuSlashCommandInfoText('Error searching for sys_id: ' + error.message + '<br />', true);
     }
 }
 
