@@ -175,6 +175,7 @@ class SnuNextManager {
 
         namesAdded += this.addTechnicalNamesLists();
         namesAdded += this.playbookContextRemoveHelper();
+        namesAdded += this.addQueryEditorButtons();
 
         //toggle visibility
         querySelectorShadowDom.querySelectorAllDeep('.snutn').forEach(cls => {
@@ -339,6 +340,94 @@ grSPC.deleteMultiple();`;
 
         return namesAdded;
 
+    }
+
+    addQueryEditorButtons() {
+        let namesAdded = 0;
+        
+        // Find all condition builder components
+        let builders = querySelectorShadowDom.querySelectorAllDeep('now-condition-builder-connected');
+        
+        builders.forEach(builder => {
+            // Skip if we already added controls for this builder
+            if (builder.hasAttribute('snu-query-editor-added')) {
+                return;
+            }
+            
+            // Mark this builder as processed
+            builder.setAttribute('snu-query-editor-added', 'true');
+            
+            // Create wrapper div for SN Utils controls (similar to list utilities pattern)
+            let div = document.createElement("div");
+            div.classList.add('snutn', 'snuactiondiv');
+            div.title = '[SN Utils] Condition builder utilities';
+            div.style = 'margin: 5px 0; padding: 5px; width: max-content; gap: 5px; display: flex; align-items: center;';
+            
+            // Create edit query button (compact, icon-only)
+            let diveq = document.createElement("div");
+            diveq.style = 'display: inline';
+            let btneq = document.createElement("now-button");
+            btneq.icon = 'pencil-fill';
+            btneq.variant = 'secondary';
+            btneq.size = 'sm';
+            btneq.title = '[SN Utils] Click to view/edit encoded query';
+            btneq.addEventListener('click', () => {
+                const currentQuery = builder.encodedQuery || '';
+                const newQuery = prompt('[SN Utils]\nEdit encoded query:', currentQuery);
+                if (newQuery !== null) {
+                    console.log('[SN Utils] Updating encoded query from', currentQuery, 'to', newQuery);
+                    builder.encodedQuery = newQuery;
+                    
+                    // Dispatch a custom event to notify that the query was updated
+                    builder.dispatchEvent(new CustomEvent('query-updated', { 
+                        detail: { oldQuery: currentQuery, newQuery } 
+                    }));
+                }
+            });
+            diveq.appendChild(btneq);
+            div.appendChild(diveq);
+            
+            // Add label text showing it's a condition builder
+            let spn = document.createElement("span");
+            spn.innerText = 'Condition Builder';
+            spn.title = '[SN Utils] Condition builder component';
+            spn.style = 'margin-left: 5px; font-size: 9pt;';
+            spn.classList.add('snunodblclk');
+            div.appendChild(spn);
+            
+            // Insert the controls into the component
+            if (builder.shadowRoot) {
+                // Shadow DOM case - insert at the top
+                const insertionPoint = builder.shadowRoot.querySelector(
+                    'div, section, header, .content, .body, .form-group'
+                );
+                
+                if (insertionPoint) {
+                    insertionPoint.insertBefore(div, insertionPoint.firstChild);
+                } else if (builder.shadowRoot.firstChild) {
+                    builder.shadowRoot.insertBefore(div, builder.shadowRoot.firstChild);
+                } else {
+                    builder.shadowRoot.appendChild(div);
+                }
+            } else {
+                // Light DOM case
+                const insertionPoint = builder.querySelector(
+                    'div, section, header, .content, .body, .form-group'
+                );
+                
+                if (insertionPoint) {
+                    insertionPoint.insertBefore(div, insertionPoint.firstChild);
+                } else if (builder.firstChild) {
+                    builder.insertBefore(div, builder.firstChild);
+                } else {
+                    builder.appendChild(div);
+                }
+            }
+            
+            namesAdded++;
+        });
+        
+        return namesAdded;
     }
 
     createLabelLink(elm) {
